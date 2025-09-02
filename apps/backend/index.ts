@@ -1,37 +1,65 @@
 import express, { raw } from "express";
 import { TrainModel, GenerateImage, GenerateImagesFromPack } from "common/types";
 import { prismaClient } from "db";
-import { S3Client, s3, write } from "bun";
+import { S3Client } from "bun";
 import { FalAiModel } from "./models/FalAiModel";
 const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
-const FALAIMODELS = new FalAiModel();
+const FALAIMODEL = new FalAiModel();
+
+app.get("/pre-signed-url", async (req, res) => {
+  const key = `models/${Date.now()}_${Math.random()}.zip`;
+  const url = S3Client.presign(key, {
+    method: "PUT",
+    accessKeyId: process.env.S3_ACCESS_KEY,
+    secretAccessKey: process.env.S3_SECRET_KEY,
+    endpoint: process.env.ENDPOINT,
+    bucket: process.env.BUCKET_NAME,
+    expiresIn: 60 * 5,
+    type: "application/zip",
+  });
+
+  res.json({
+    url,
+    key,
+  });
+});
 
 app.post("/ai/training", async (req, res) => {
-  const parsedBody = TrainModel.safeParse(req.body);
-  if (!parsedBody.success) {
-    return res.status(411).json({ message: "Input incorrect" });
-  }
   try {
-  const images = req.body.images;
-  await FALAIMODELS.trainModel(parsedBody.data.name, images);
-  const data = await prismaClient.model.create({
-    data: {
-      name: parsedBody.data.name,
-      type: parsedBody.data.type,
-      age: parsedBody.data.age,
-      ethinicity: parsedBody.data.ethinicity,
-      eyeColor: parsedBody.data.eyeColor,
-      bald: parsedBody.data.bald,
-      zipUrl: parsedBody.data.zipUrl,
-      userId: "QWERTY",
-    },
-  });
-  res.json({
-    modelId: data.id,
-  });
+    const parsedBody = TrainModel.safeParse(req.body);
+    if (!parsedBody.success) {
+      res.status(411).json({
+        message: "Input incorrect",
+        error: parsedBody.error,
+      });
+      return;
+    }
+
+    const { request_id, response_url } = await FALAIMODEL.trainModel(
+      parsedBody.data.zipUrl,
+      parsedBody.data.name
+    );
+
+    const data = await prismaClient.model.create({
+      data: {
+        name: parsedBody.data.name,
+        type: parsedBody.data.type,
+        age: parsedBody.data.age,
+        ethinicity: parsedBody.data.ethinicity,
+        eyeColor: parsedBody.data.eyeColor,
+        bald: parsedBody.data.bald,
+        userId: "QWERTY",
+        zipUrl: parsedBody.data.zipUrl,
+        falAiRequestId: request_id,
+      },
+    });
+
+    res.json({
+      modelId: data.id,
+    });
   } catch (error) {
     console.error("Error in /ai/training:", error);
     res.status(500).json({
@@ -39,7 +67,7 @@ app.post("/ai/training", async (req, res) => {
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
-})
+});
 
 app.post("/ai/generate", async(req, res) => {
   const parsedBody = GenerateImage.safeParse(req.body);
@@ -47,12 +75,26 @@ app.post("/ai/generate", async(req, res) => {
     return res.status(411).json({ message: "Input incorrect" });
   }
   try {
+    const model = await prismaClient.model.findUnique({
+      where: {
+        id: parsedBody.data.modelId,
+      },
+    });
+    if (!model || !model.tensorPath) {
+      return res.status(411).json({ message: "Model not found" });
+    }
+    const { request_id, response_url } = await FALAIMODEL.generateImages(
+      parsedBody.data.prompt,
+      model.tensorPath
+    );
+  
     const data = await prismaClient.outputImages.create({
       data: {
-        modelId: parsedBody.data.modelId, 
         prompt: parsedBody.data.prompt,
         userId: "QWERTY",
-        imageUrl: ""
+        modelId: parsedBody.data.modelId,
+        imageUrl: "",
+        falAiRequestId: request_id,
       },
     });
     res.json({
@@ -67,47 +109,112 @@ app.post("/ai/generate", async(req, res) => {
   }
 })
 
+app.post("/ai/generate", async (req, res) => {
+  const parsedBody = GenerateImage.safeParse(req.body);
+
+  if (!parsedBody.success) {
+    res.status(411).json({});
+    return;
+  }
+
+  const model = await prismaClient.model.findUnique({
+    where: {
+      id: parsedBody.data.modelId,
+    },
+  });
+
+  if (!model || !model.tensorPath) {
+    res.status(411).json({
+      message: "Model not found",
+    });
+    return;
+  }
+  // check if the user has enough credits
+  const credits = await prismaClient.userCredit.findUnique({
+    where: {
+      userId: "QWERTY",
+    },
+  });
+  const { request_id, response_url } = await FALAIMODEL.generateImages(
+    parsedBody.data.prompt,
+    model.tensorPath
+  );
+
+  const data = await prismaClient.outputImages.create({
+    data: {
+      prompt: parsedBody.data.prompt,
+      userId: "QWERTY",
+      modelId: parsedBody.data.modelId,
+      imageUrl: "",
+      falAiRequestId: request_id,
+    },
+  });
+
+  await prismaClient.userCredit.update({
+    where: {
+      userId: "QWERTY",
+    },
+    data: {
+      amount: { decrement: 1 },
+    },
+  });
+
+  res.json({
+    imageId: data.id,
+  });
+});
+
 app.post("/pack/generate", async (req, res) => {
   const parsedBody = GenerateImagesFromPack.safeParse(req.body);
+
   if (!parsedBody.success) {
-    return res.status(411).json({ message: "Input incorrect" });
+    res.status(411).json({
+      message: "Input incorrect",
+    });
+    return;
   }
-  
-  const prompt = await prismaClient.packPrompts.findMany({
+
+  const prompts = await prismaClient.packPrompts.findMany({
     where: {
       packId: parsedBody.data.packId,
-    }
+    },
   });
 
-  // First create all records
-  await prismaClient.outputImages.createMany({
-    data: prompt.map((prompt: any) => ({
-      prompt: prompt.prompt,
-      modelId: parsedBody.data.modelId,
-      userId: "QWERTY",
-      imageUrl: ""
-    }))
-  });
-
-  // Then fetch their IDs
-  const images = await prismaClient.outputImages.findMany({
+  const model = await prismaClient.model.findFirst({
     where: {
-      modelId: parsedBody.data.modelId,
-      userId: "QWERTY"
+      id: parsedBody.data.modelId,
     },
-    select: {
-      id: true
-    },
-    orderBy: {
-      createdAt: 'desc'
-    },
-    take: prompt.length
   });
+
+  if (!model) {
+    res.status(411).json({
+      message: "Model not found",
+    });
+    return;
+  }
+
+  let requestIds: { request_id: string }[] = await Promise.all(
+    prompts.map((prompt) =>
+      FALAIMODEL.generateImages(prompt.prompt, model.tensorPath!)
+    )
+  );
+
+  const images = await prismaClient.outputImages.createManyAndReturn({
+    data: prompts.map((prompt, index) => ({
+      prompt: prompt.prompt,
+      userId: "QWERTY",
+      modelId: parsedBody.data.modelId,
+      imageUrl: "",
+      falAiRequestId: requestIds[index]?.request_id,
+    })),
+  });
+
 
   res.json({
     images: images.map((image) => image.id),
   });
 });
+
 app.get("/pack/bulk", async (req,res) => {
   const packs = await prismaClient.packs.findMany({})
 
