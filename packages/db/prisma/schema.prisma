@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @default(uuid())
+  clerkId String @unique
+  email String @unique
+  name String?
+  profilePictureUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ModelTrainingStatusEnum {
+  Pending
+  Generated
+  Failed
+}
+
+enum OutputImagesEnum {
+  Pending
+  Generated
+  Failed
+}
+
+
+model Model {
+  id String @id @default(uuid())
+  name String
+  type ModelTypeEnum
+  age             Int
+  ethinicity      EthenecityEnum  
+  eyeColor        EyeColorEnum
+  bald            Boolean
+  userId          String
+  triggerWord     String?
+  tensorPath      String?
+  thumbnail       String?
+  trainingStatus  ModelTrainingStatusEnum @default(Pending)
+  outputImages    OutputImages[]
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  falAiRequestId  String?
+  zipUrl          String
+  open            Boolean    @default(false)
+  @@index([falAiRequestId])
+}
+
+
+enum ModelTypeEnum {
+  Man
+  Woman
+  Other
+}
+
+enum EthenecityEnum {
+  White
+  Black
+  Asian_American
+  East_Asian
+  South_East_Asian
+  South_Asian
+  Middle_Eastern
+  Pacific
+  Hispanic
+}
+
+enum EyeColorEnum {
+  Brown
+  Blue
+  Hazel
+  Gray
+}
+
+model OutputImages {
+  id String @id @default(uuid())
+  imageUrl String
+  modelId String
+  userId String
+  prompt String
+  falAiRequestId String?
+  status OutputImagesEnum @default(Pending)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([falAiRequestId])
+  model Model @relation(fields: [modelId], references: [id])
+} 
+
+model Packs {
+  id String @id @default(uuid())
+  name String
+  description String @default("")
+  imageUrl1 String @default("")
+  imageUrl2 String @default("")
+  prompts PackPrompts[]
+}
+
+model PackPrompts {
+  id String @id @default(uuid())
+  prompt String
+  packId String
+  pack Packs @relation(fields: [packId], references: [id])
+}
+
+model Subscription {
+  id String @id @default(uuid())
+  userId String
+  plan PlanType
+  paymentId String
+  orderId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum PlanType {
+  basic
+  premium
+}
+
+model UserCredit {
+  id String @id @default(uuid())
+  userId String @unique
+  amount Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model Transaction {
+  id String @id @default(uuid())
+  userId String
+  amount Int
+  currency String
+  paymentId String
+  orderId String
+  plan PlanType
+  status TransactionStatus @default(PENDING)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+}
