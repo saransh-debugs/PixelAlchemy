@@ -18,11 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { UploadModal } from "@/components/ui/upload"
 import { useState } from "react"
-import { TrainModelInput } from "common/inferred"
 import axios from "axios"
-import { BACKEND_URL } from "../config"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@clerk/nextjs"
 
@@ -50,13 +47,6 @@ export default function Train() {
         };
 
         const token = await getToken()
-        const response = await axios.post(`${BACKEND_URL}/ai/training`, input, {
-            headers: {
-                Authorization
-                
-                : `Bearer ${token}`
-            }
-        });
         router.push("/");
     }
 
@@ -135,9 +125,6 @@ export default function Train() {
                             setBald(!bald)
                         }} />
                     </div>
-                    <UploadModal handleUpload={(files) => {
-                        setZipUrl(files[0]?.name ?? "")
-                    }} uploadProgress={0} isUploading={false} />
                 </div>
             </CardContent>
             <CardFooter className="flex justify-between">
